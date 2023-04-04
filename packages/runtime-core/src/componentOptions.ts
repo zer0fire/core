@@ -5,8 +5,7 @@ import {
   ComponentInternalOptions,
   Component,
   ConcreteComponent,
-  InternalRenderFunction,
-  LifecycleHooks
+  InternalRenderFunction
 } from './component'
 import {
   isFunction,
@@ -17,7 +16,7 @@ import {
   NOOP,
   isPromise,
   LooseRequired,
-  UnionToIntersection
+  Prettify
 } from '@vue/shared'
 import { isRef, Ref } from '@vue/reactivity'
 import { computed } from './apiComputed'
@@ -59,7 +58,9 @@ import { Directive } from './directives'
 import {
   CreateComponentPublicInstance,
   ComponentPublicInstance,
-  isReservedPrefix
+  isReservedPrefix,
+  IntersectionMixin,
+  UnwrapMixinsType
 } from './componentPublicInstance'
 import { warn } from './warning'
 import { VNodeChild } from './vnode'
@@ -72,6 +73,8 @@ import {
   softAssertCompatEnabled
 } from './compat/compatConfig'
 import { OptionMergeFunction } from './apiCreateApp'
+import { LifecycleHooks } from './enums'
+import { SlotsType } from './componentSlots'
 
 /**
  * Interface for declaring custom options.
@@ -93,21 +96,6 @@ export interface ComponentCustomOptions {}
 
 export type RenderFunction = () => VNodeChild
 
-type ExtractOptionProp<T> = T extends ComponentOptionsBase<
-  infer P, // Props
-  any, // RawBindings
-  any, // D
-  any, // C
-  any, // M
-  any, // Mixin
-  any, // Extends
-  any // EmitsOptions
->
-  ? unknown extends P
-    ? {}
-    : P
-  : {}
-
 export interface ComponentOptionsBase<
   Props,
   RawBindings,
@@ -118,20 +106,25 @@ export interface ComponentOptionsBase<
   Extends extends ComponentOptionsMixin,
   E extends EmitsOptions,
   EE extends string = string,
-  Defaults = {}
-> extends LegacyOptions<Props, D, C, M, Mixin, Extends>,
+  S extends SlotsType = {},
+  Defaults = {},
+  I extends ComponentInjectOptions = {},
+  II extends string = string
+> extends LegacyOptions<Props, D, C, M, Mixin, Extends, I, II>,
     ComponentInternalOptions,
     ComponentCustomOptions {
   setup?: (
     this: void,
-    props: Readonly<
-      LooseRequired<
-        Props &
-          UnionToIntersection<ExtractOptionProp<Mixin>> &
-          UnionToIntersection<ExtractOptionProp<Extends>>
-      >
+    props: LooseRequired<
+      Props &
+        Prettify<
+          UnwrapMixinsType<
+            IntersectionMixin<Mixin> & IntersectionMixin<Extends>,
+            'P'
+          >
+        >
     >,
-    ctx: SetupContext<E>
+    ctx: SetupContext<E, S>
   ) => Promise<RawBindings> | RawBindings | RenderFunction | void
   name?: string
   template?: string | object // can be a direct DOM node
@@ -145,9 +138,10 @@ export interface ComponentOptionsBase<
   directives?: Record<string, Directive>
   inheritAttrs?: boolean
   emits?: (E | EE[]) & ThisType<void>
+  slots?: S
   // TODO infer public instance type based on exposed keys
   expose?: string[]
-  serverPrefetch?(): Promise<any>
+  serverPrefetch?(): void | Promise<any>
 
   // Runtime compiler only -----------------------------------------------------
   compilerOptions?: RuntimeCompilerOptions
@@ -225,6 +219,9 @@ export type ComponentOptionsWithoutProps<
   Extends extends ComponentOptionsMixin = ComponentOptionsMixin,
   E extends EmitsOptions = EmitsOptions,
   EE extends string = string,
+  S extends SlotsType = {},
+  I extends ComponentInjectOptions = {},
+  II extends string = string,
   PE = Props & EmitsToProps<E>
 > = ComponentOptionsBase<
   PE,
@@ -236,11 +233,28 @@ export type ComponentOptionsWithoutProps<
   Extends,
   E,
   EE,
-  {}
+  S,
+  {},
+  I,
+  II
 > & {
   props?: undefined
 } & ThisType<
-    CreateComponentPublicInstance<PE, RawBindings, D, C, M, Mixin, Extends, E>
+    CreateComponentPublicInstance<
+      PE,
+      RawBindings,
+      D,
+      C,
+      M,
+      Mixin,
+      Extends,
+      E,
+      S,
+      PE,
+      {},
+      false,
+      I
+    >
   >
 
 export type ComponentOptionsWithArrayProps<
@@ -253,7 +267,10 @@ export type ComponentOptionsWithArrayProps<
   Extends extends ComponentOptionsMixin = ComponentOptionsMixin,
   E extends EmitsOptions = EmitsOptions,
   EE extends string = string,
-  Props = Readonly<{ [key in PropNames]?: any }> & EmitsToProps<E>
+  S extends SlotsType = {},
+  I extends ComponentInjectOptions = {},
+  II extends string = string,
+  Props = Prettify<Readonly<{ [key in PropNames]?: any } & EmitsToProps<E>>>
 > = ComponentOptionsBase<
   Props,
   RawBindings,
@@ -264,7 +281,10 @@ export type ComponentOptionsWithArrayProps<
   Extends,
   E,
   EE,
-  {}
+  S,
+  {},
+  I,
+  II
 > & {
   props: PropNames[]
 } & ThisType<
@@ -276,7 +296,12 @@ export type ComponentOptionsWithArrayProps<
       M,
       Mixin,
       Extends,
-      E
+      E,
+      S,
+      Props,
+      {},
+      false,
+      I
     >
   >
 
@@ -290,7 +315,10 @@ export type ComponentOptionsWithObjectProps<
   Extends extends ComponentOptionsMixin = ComponentOptionsMixin,
   E extends EmitsOptions = EmitsOptions,
   EE extends string = string,
-  Props = Readonly<ExtractPropTypes<PropsOptions>> & EmitsToProps<E>,
+  S extends SlotsType = {},
+  I extends ComponentInjectOptions = {},
+  II extends string = string,
+  Props = Prettify<Readonly<ExtractPropTypes<PropsOptions> & EmitsToProps<E>>>,
   Defaults = ExtractDefaultPropTypes<PropsOptions>
 > = ComponentOptionsBase<
   Props,
@@ -302,7 +330,10 @@ export type ComponentOptionsWithObjectProps<
   Extends,
   E,
   EE,
-  Defaults
+  S,
+  Defaults,
+  I,
+  II
 > & {
   props: PropsOptions & ThisType<void>
 } & ThisType<
@@ -315,9 +346,11 @@ export type ComponentOptionsWithObjectProps<
       Mixin,
       Extends,
       E,
+      S,
       Props,
       Defaults,
-      false
+      false,
+      I
     >
   >
 
@@ -329,8 +362,20 @@ export type ComponentOptions<
   M extends MethodOptions = any,
   Mixin extends ComponentOptionsMixin = any,
   Extends extends ComponentOptionsMixin = any,
-  E extends EmitsOptions = any
-> = ComponentOptionsBase<Props, RawBindings, D, C, M, Mixin, Extends, E> &
+  E extends EmitsOptions = any,
+  S extends SlotsType = any
+> = ComponentOptionsBase<
+  Props,
+  RawBindings,
+  D,
+  C,
+  M,
+  Mixin,
+  Extends,
+  E,
+  string,
+  S
+> &
   ThisType<
     CreateComponentPublicInstance<
       {},
@@ -346,6 +391,7 @@ export type ComponentOptions<
   >
 
 export type ComponentOptionsMixin = ComponentOptionsBase<
+  any,
   any,
   any,
   any,
@@ -389,12 +435,23 @@ export type ComponentProvideOptions = ObjectProvideOptions | Function
 
 type ObjectProvideOptions = Record<string | symbol, unknown>
 
-type ComponentInjectOptions = string[] | ObjectInjectOptions
+export type ComponentInjectOptions = string[] | ObjectInjectOptions
 
 type ObjectInjectOptions = Record<
   string | symbol,
   string | symbol | { from?: string | symbol; default?: unknown }
 >
+
+export type InjectToObject<T extends ComponentInjectOptions> =
+  T extends string[]
+    ? {
+        [K in T[number]]?: unknown
+      }
+    : T extends ObjectInjectOptions
+    ? {
+        [K in keyof T]?: unknown
+      }
+    : never
 
 interface LegacyOptions<
   Props,
@@ -402,7 +459,9 @@ interface LegacyOptions<
   C extends ComputedOptions,
   M extends MethodOptions,
   Mixin extends ComponentOptionsMixin,
-  Extends extends ComponentOptionsMixin
+  Extends extends ComponentOptionsMixin,
+  I extends ComponentInjectOptions,
+  II extends string
 > {
   compatConfig?: CompatConfig
 
@@ -437,7 +496,7 @@ interface LegacyOptions<
   methods?: M
   watch?: ComponentWatchOptions
   provide?: ComponentProvideOptions
-  inject?: ComponentInjectOptions
+  inject?: I | II[]
 
   // assets
   filters?: Record<string, Function>
@@ -966,8 +1025,9 @@ export function resolveMergedOptions(
     }
     mergeOptions(resolved, base, optionMergeStrategies)
   }
-
-  cache.set(base, resolved)
+  if (isObject(base)) {
+    cache.set(base, resolved)
+  }
   return resolved
 }
 

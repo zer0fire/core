@@ -30,7 +30,11 @@ function genVarName(id: string, raw: string, isProd: boolean): string {
   if (isProd) {
     return hash(id + raw)
   } else {
-    return `${id}-${raw.replace(/([^\w-])/g, '_')}`
+    // escape ASCII Punctuation & Symbols
+    return `${id}-${raw.replace(
+      /[ !"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g,
+      s => `\\${s}`
+    )}`
   }
 }
 
@@ -180,7 +184,8 @@ export function genNormalScriptCssVarsCode(
   cssVars: string[],
   bindings: BindingMetadata,
   id: string,
-  isProd: boolean
+  isProd: boolean,
+  defaultVar: string
 ): string {
   return (
     `\nimport { ${CSS_VARS_HELPER} as _${CSS_VARS_HELPER} } from 'vue'\n` +
@@ -190,8 +195,8 @@ export function genNormalScriptCssVarsCode(
       id,
       isProd
     )}}\n` +
-    `const __setup__ = __default__.setup\n` +
-    `__default__.setup = __setup__\n` +
+    `const __setup__ = ${defaultVar}.setup\n` +
+    `${defaultVar}.setup = __setup__\n` +
     `  ? (props, ctx) => { __injectCSSVars__();return __setup__(props, ctx) }\n` +
     `  : __injectCSSVars__\n`
   )
